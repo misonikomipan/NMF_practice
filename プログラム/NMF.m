@@ -1,40 +1,48 @@
 clear; close all; clc;
 
-%音声の入力とスペクトログラム計算%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-[x,fs] = audioread('piano.wav'); %入力音声ファイル(今回はピアノいれた)
+% 音声信号の入力と学習ステージ %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+[piano,fs] = audioread('ymh_pf_scale.wav'); % ピアノの音階信号
+x = piano;
+[col,k,oneMat,update,wMat] = get_wMat(x);
+pi_wMat = wMat;
+
+trumpet = audioread('ymh_tp_scale.wav'); % トランペットの音階信号
+x = trumpet;
+[~,~,~,~,wMat] = get_wMat(x);
+tr_wMat = wMat;
+
+% 混合音声信号の生成と分離ステージ %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+w1 = randi([3 10])/10; % 各信号の重みを生成(今回は0.3~1の範囲で)
+w2 = randi([3 10])/10;
+mixed = w1*piano + w2*trumpet; % 混合音声信号
 
 F = DGTtool(windowshift = 1024,windowLength = 2048,FFTnum =2048,windowName="Hann"); %stftやってくれる神!!
 
-X = F(x); %スペクトログラムの計算
+MIXED = F(mixed);
+amp_MIXED = abs(MIXED);
 
-amp_X = abs(X); %振幅スペクトログラムを計算
-arg_X = angle(X); %位相スペクトログラムを計算
-exp_i = exp(1i*arg_X); %位相のための極形式
+pi_gMat = randi(10,k,col); % G行列の初期設定(各要素の初期値は乱数で設定)
+tr_gMat = randi(10,k,col);
 
-%F.plot(x,fs) %スペクトログラムの表示(以下2つも同様)
-%F.plotPhase(x,fs)
-%F.plotReassign(x,fs)
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+[pi_gMat,tr_gMat] = KL_NMF_multiple(amp_MIXED,pi_wMat,tr_wMat,pi_gMat,tr_gMat,oneMat,update);
 
-%再現行列の用意等の準備%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-[row,col] = size(amp_X); % スペクトログラムと同サイズの行列生成
+% 分離した各々の信号の復元とSDR計算 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+common = MIXED./((pi_wMat*pi_gMat).^2+(tr_wMat*tr_gMat).^2); % Wiener filter
+PIANO = ((pi_wMat*pi_gMat).^2).*common; 
+TRUMPET = ((tr_wMat*tr_gMat).^2).*common;
 
-k = randperm(10,1); % W行列の列数かつH行列の行数(Maxで10までとした)
-wMat = randi(10,row,k); 
-hMat = randi(10,k,col);
+app_p = F.pinv(PIANO); % 分離音声信号
+app_t = F.pinv(TRUMPET);
 
-oneMat = ones(row,col); % 要素が全て1の行列
+app_p = app_p/max(abs(app_p),[],"all"); % 1以下調整
+app_t = app_t/max(abs(app_t),[],"all");
 
-update = 100; % 更新回数
-x_axis = 1:update; % 更新回数ベクトル(誤差関数のプロット用)
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+filename = 'app_p.wav'; % 分離音声書き出し
+audiowrite(filename,app_p,fs); 
 
-%Eu_NMF(inMat,wMat,hMat,update,x_axis); %Eu_NMF関数
-[KLMat] = KL_NMF(amp_X,wMat,hMat,oneMat,update,x_axis); %KL_NMF関数
-%IS_NMF(inMat,wMat,hMat,oneMat,update,x_axis); %IS_NMF関数
+filename = 'app_t.wav';
+audiowrite(filename,app_t,fs);
 
-app_x = F.pinv(KLMat.*exp_i); %スペクトログラムから信号を復元する逆変換(振幅は近似, 位相は保存したものを使用)
-
-app_x = app_x/max(abs(app_x),[],"all"); %1以下調整
-filename = 'approximate.wav';
-audiowrite(filename,app_x,fs); % 近似再現した音声
+[SDR_p,~,~,~] = bss_eval_sources(app_p.',piano.') % SDR計算
+[SDR_t,~,~,~] = bss_eval_sources(app_t.',trumpet.')
